@@ -59,7 +59,7 @@
 # 
 # ## `save_lexical_items_to_mongo`: 掃過vrt，把詞彙資訊整理到mongodb中
 
-# In[2]:
+# In[9]:
 
 
 import os
@@ -73,14 +73,18 @@ from datetime import datetime
 import timeit
 import logging
 import multiprocessing as mp
-from pymongo import MongoClient
+# from pymongo import MongoClient
+
+from ckipws import CKIP
+from html2json import html2json, html2json_wrapper
+from json2tei import json2tei, json2tei_wrapper
 
 
-import libtmux
-from pyquery import PyQuery
-from html.parser import HTMLParser
+# import libtmux
+# from pyquery import PyQuery
+# from html.parser import HTMLParser
 
-from html2vrt_new import parse_content
+# from html2vrt_new import parse_content
 # from ckiptagger import data_utils, construct_dictionary, WS, POS, NER
 
 
@@ -155,251 +159,9 @@ def get_latest_post_timestamp(data_dir, board_name):
     return latest_timestamp
 
 
-# # `html2json`
-
-# In[ ]:
-
-
-def html2json(html_path):
-    """
-    輸入： html格式的string
-    
-    輸出：
-    - 如果 輸入中找不到 #main-content，或者沒有主文，回傳 None
-    - 如果找得到，則正常回傳 parse 後的 post dict
-    """
-    
-    with open(html_path, "r") as f:
-        html = f.read()
-    
-    pq = PyQuery(html).make_links_absolute('https://www.ptt.cc/bbs/')
-
-    html_pq_main_content = pq('#main-content')
-
-    if len(html_pq_main_content) == 0:
-        return None
-
-    ###################
-    # PARSE META DATA #
-    ###################
-    # po文的文章id, po文時間, po文所在的版
-    post_id = html_path.stem.split('_')[-1]
-
-    # po文的時間
-    post_timestamp = re.search(r'\d{10}', str(html_path.stem)).group(0)
-#     post_time = datetime.fromtimestamp(int(post_timestamp))
-
-    # 在哪個版
-    post_board = html_path.parent.parent.stem
-
-    # 抓出meta: 作者/標題/時間
-    meta = dict(
-        (_.text(), _.next().text())
-        for _
-        in pq('.article-meta-tag').items()
-    )
-
-    ref = {
-        '作者': 'author',
-        '標題': 'title',
-        '看板': 'board',
-    }
-
-    if '作者' in meta:
-        post_author = meta['作者'].strip().split(' ')[0]
-    else:
-        post_author = ""
-
-    if '標題' in meta:
-        post_title = meta['標題'].strip()
-    else:
-        post_title = ""
-
-
-
-    ######################
-    # PARSE MAIN CONTENT #
-    ######################
-
-    body = mod_content(
-        html_pq_main_content
-        .clone()
-        .children()
-        .remove('span[class^="article-meta-"]')
-        .remove('div.push')
-        .end()
-        .html()
-    )
-
-    if body == '' or body is None:
-        return None
-
-    # 篩掉引述的部分
-    try:
-        qs = re.findall('※ 引述.*|\n: .*', body)
-        for q in qs:
-            body = body.replace(q, '')
-        body = body.strip('\n ')
-    except Exception as e:
-        print(e)
-
-    ###################
-    # PARSE COMMENTS  #
-    ###################
-    comments = parse_comments(pq)
-
-    post = {
-        "post_board": post_board,
-        "post_id": post_id,
-        "post_time": post_timestamp,
-        "post_title": post_title,
-        "post_author": post_author,
-        "post_body": body,
-        "post_vote": comments["post_vote"],
-        "comments": comments["comments"]
-    }
-
-
-    return post
-
-class MLStripper(HTMLParser):
-    """HTML tag stripper.
-
-    ref: http://stackoverflow.com/a/925630/1105489
-    """
-
-    def __init__(self):  # noqa
-        self.reset()
-        self.strict = False
-        self.convert_charrefs = True
-        self.fed = []
-
-    def handle_data(self, d):  # noqa
-        self.fed.append(d)
-
-    def get_data(self):  # noqa
-        return ''.join(self.fed)
-
-    @classmethod
-    def strip_tags(cls, html):  # noqa
-        s = cls()
-        s.feed(html)
-        return s.get_data()
-
-
-def mod_content(content):
-    """Remove unnecessary info from a PTT post."""
-    content = MLStripper.strip_tags(content)
-    content = re.sub(
-        r"※ 發信站.*|※ 文章網址.*|※ 編輯.*", '', content
-    ).strip('\r\n-')
-    return content
-
-def parse_comments(html_pq):
-    """
-    處理下方回文，將之結構化。
-    
-    input: PyQuery 物件
-    
-    Output: 
-        如果沒有回文，回傳 dict {
-            "comments": [],
-            "post_vote": {
-                "positive": <int>,
-                "negative": <int>,
-                "neutral": <int>
-            }
-        
-        }
-        
-        如果有，則回傳 dict {
-            "comments": [
-                {
-                    "author": <str>,
-                    "type": <str: "neg", "pos", "neu">,
-                    "content": <str>,
-                    "order": <int>
-                },
-            ]
-        }
-    """
-    comments = []
-    post_vote = {
-        "pos": 0,
-        "neg": 0,
-        "neu": 0
-    }
-    
-    type_table = {
-        "推": "pos",
-        "噓": "neg",
-        "→": "neu"
-    }
-    
-    for i, _ in enumerate(html_pq('.push').items()):
-        comment_type = _('.push-tag').text()
-        
-        # 總結
-        if comment_type == "推":
-            post_vote["pos"] += 1
-        elif comment_type == "噓":
-            post_vote["neg"] += 1
-        elif comment_type == "→":
-            post_vote["neu"] += 1
-        else:
-            continue
-
-        comment = {
-            'type': type_table[comment_type],
-            'author': _('.push-userid').text().split(' ')[0],
-            'content': _('.push-content').text().lstrip(' :'),
-            'order': i+1
-        }
-
-        comments.append(comment)
-
-
-    return {
-        "comments": comments,
-        "post_vote": post_vote
-    }
-
-
-# In[ ]:
-
-
-def html2json_wrapper(html_path):
-    logging.info("開始處理: %s", html_path)
-
-    # 即將要產生的.json檔路徑
-    json_path = html_path.with_suffix(".json")
-
-    # 如果該資料夾已經有 .json 檔了就跳過
-    if json_path.is_file():
-        logging.info("-- 已存在json檔: %s", json_path)
-        return
-
-    try:
-        json_result = html2json(html_path)
-
-    except Exception as e:
-        print(f"出問題檔案: {html_path}")
-        print(f"錯誤訊息: {e}")
-        logging.error("-- 執行 html2json() 出問題")
-        logging.error("-- 錯誤訊息: %s", e)
-   
-    else:
-        if json_result is None:
-            logging.warning("-- 空白文!")
-            return
-
-        with json_path.open("w") as f:
-            json.dump(json_result, f)
-
-
 # # `json2vrt`
 
-# In[17]:
+# In[ ]:
 
 
 def is_not_chinese_char(char):
@@ -650,68 +412,265 @@ def json2vrt_wrapper(json_path):
             f.write(vrt_result)
 
 
-# # 斷詞
+# # `json2tei`
 
-# In[12]:
+# In[7]:
 
 
-import ctypes, sys
-import os
+# ckip = CKIP("/home/don/CKIPWS_Linux")
 
-class PyWordSeg(object):
-    def __init__(self, Library, inifile):
-        self.lib = ctypes.cdll.LoadLibrary(Library)
-        self.lib.WordSeg_InitData.restype=ctypes.c_bool
-        self.lib.WordSeg_ApplyList.restype=ctypes.c_bool
-        self.lib.WordSeg_GetResultBegin.restype=ctypes.c_wchar_p
-        self.lib.WordSeg_GetResultNext.restype=ctypes.c_wchar_p
-        self.obj = self.lib.WordSeg_New()
-        ret = self.lib.WordSeg_InitData(self.obj, inifile.encode('utf-8'))
-        if not ret:
-            raise IOError("Loading %s failed."%(inifile))
+# def is_not_chinese_char(char):
+#     """
+#     Python port of Moses' code to check for CJK character.
 
-    def EnableLogger(self):
-        self.lib.WordSeg_EnableConsoleLogger(self.obj)
+#     :param character: The character that needs to be checked.
+#     :type character: char
+#     :return: bool
+#     """
+#     return not (19968 <= ord(char) <= 40869)
 
-    def ApplyList(self, inputList):
-        if len(inputList)==0:
-            return []
-        inArr=(ctypes.c_wchar_p*len(inputList))()
-        inArr[:]=inputList
-        ret=self.lib.WordSeg_ApplyList(self.obj, len(inputList), inArr)
-        if ret==None:
-            return []
+# def no_chinese_char_at_all(string):
+#     return all(map(is_not_chinese_char, string))
 
-        outputList=[]
-        out=self.lib.WordSeg_GetResultBegin(self.obj)
-        while out!=None:
-            outputList.append(out)
-            out=self.lib.WordSeg_GetResultNext(self.obj)
+# def _preprocessing_content(string):
+#     """
+#     將ptt內文作為字串，篩掉那些非中文字，並回傳真正要丟入斷詞的list of strings
+#     Input: content string
+#     Output: list of valid string
+#     """
+#     result = []
+    
+#     for sentence in string.split():
+#         if not no_chinese_char_at_all(sentence.strip()):
+#             result.append(sentence.strip())
+#     return result
+
+
+# def _seg_and_pos(list_of_sentences, ckipws):
+#     """
+#     input: <List of String>
+#     ["我每天都在睡覺", "好喜歡寫程式"]
+    
+
+#     output: <List of List of (Str, Str)>
+#     [
+#         [
+#             ('我', 'Nb'),
+#             ('每天', 'P'),
+#             ...
+#         ],
+#         [
+#             ('好', 'D'),
+#             ('喜歡', 'V')
+#         ]
+#     ]
+#     """
+#     list_of_segmented_sentences = None
+#     result = []
+    
+#     # 先檢查輸入的list中，是否有空字串的元素
+
+#     indexs = []
+#     ls = map(str.strip, list_of_sentences)
+#     for i, elm in enumerate(ls):
+#         if not elm:  # 如果 elm 是 '' 空字串
+#             indexs.append(i)
+#     # 待會就用 len(indexs) 是否為 0 來判斷要不要後處理
+#     # 因為如果 ['', '我我', ''] 丟進中研院的斷詞系統
+#     # 回傳的結果會自動省略空字串變成 ['我(Nb)\n']
+
+#     try:
+#         list_of_segmented_sentences = ckipws.ApplyList(list_of_sentences)
+
+#     except Exception as e:
+#         print(e)
+#         return None
+    
+#     for segmented_sentence in list_of_segmented_sentences:
+#         _r = []
+#         for word_and_pos in segmented_sentence.strip().split('\u3000'):
+#             wp = word_and_pos.split("(")
+#             word = wp[0]
+#             pos = wp[-1].strip().strip(")")
             
-        return outputList
-
-    def Destroy(self):
-        self.lib.WordSeg_Destroy(self.obj)
-
-        
-def get_ckipws():
-    os.chdir("/home/don/CKIPWS_Linux/lib")
-    lib = '/home/don/CKIPWS_Linux/lib/libWordSeg.so'
-    os.chdir("/home/don/CKIPWS_Linux")
-    inifile = '/home/don/CKIPWS_Linux/ws.ini'
-
-    return PyWordSeg(lib, inifile)
-
-
-def initial():
-    global ckipws
+#             if not word: # 偵測為 ( 的word
+#                 word = '('
+            
+#             _r.append((word, pos))
+#         result.append(_r)
+            
+#     del list_of_segmented_sentences
     
-    os.chdir("/home/don/CKIPWS_Linux")
-    lib = '/home/don/CKIPWS_Linux/lib/libWordSeg.so'
-    inifile = '/home/don/CKIPWS_Linux/ws.ini'
+#     if len(indexs) > 0:
+#         for i in indexs:
+#             result.insert(i, [("NULL", "NULL")])
     
-    ckipws = PyWordSeg(lib, inifile)
+#     return result
 
+
+# def _render_tagged_tuple_to_string(list_of_list_of_tup, post_body=False):
+#     """
+#     post_body: 如果是本文進來斷詞的話，因為本文是可以支援多行的，所以要在output時，要為每個句子的前後加上<s></s>
+    
+#     Input: list of list of tuple
+#     [
+#         [
+#             ("我", "Nd"),
+#             ("跑", "VA"),
+#             ...
+#         ],
+#         ...
+#     ]
+     
+#     Output: <str>
+    
+#     我\tNd
+#     跑\tVA
+    
+#     """
+    
+#     if len(list_of_list_of_tup) == 0:
+#         return ""
+#     elif len(list_of_list_of_tup) == 1:
+#         # 如果是網址就不要出現
+#         if list_of_list_of_tup[0][0][0].startswith("http"):
+#             return ""
+#         return '\n'.join((f'<w type="{pos}">{word}</w>' for word, pos in list_of_list_of_tup[0]))
+#     else:
+#         result = "\n"
+#         for sentence in list_of_list_of_tup:
+#             result += "<s>\n"
+#             for word, pos in sentence:
+                
+                
+#                 if word.startswith("http"):
+#                     continue
+                
+#                 if post_body:
+#                     result += f'                <w type="{pos}">{word}</w>\n'
+
+#                 else:
+#                     result += f'                <w type="{pos}">{word}</w>\n'
+
+#             result += "</s>\n"
+                
+#         return result
+
+
+# def json2tei(json_path):
+#     global ckip
+#     with open(json_path, 'r') as f:
+#         structured_post = json.load(f)
+    
+#     post_id = structured_post["post_id"]
+#     post_author = structured_post["post_author"]
+#     post_board = structured_post["post_board"]
+    
+    
+#     if not isinstance(structured_post["post_time"], int):
+#         structured_post["post_time"] = int(structured_post["post_time"])
+#     dt = datetime.fromtimestamp(structured_post["post_time"])
+    
+#     year = str(dt.year)
+#     month = str(dt.month)
+#     day = str(dt.day)
+#     neg = str(structured_post["post_vote"]["neg"])
+#     pos = str(structured_post["post_vote"]["pos"])
+#     neu = str(structured_post["post_vote"]["neg"])
+    
+#     title_text = _render_tagged_tuple_to_string(_seg_and_pos([structured_post["post_title"]], ckip))
+    
+#     body_text = _render_tagged_tuple_to_string(_seg_and_pos(_preprocessing_content(structured_post["post_body"]), ckip), post_body=True)
+    
+#     comments_text = "\n"
+#     if len(structured_post['comments']) != 0:
+#         for c in structured_post['comments']:
+#             comment_author = c["author"]
+#             comment_type = c["type"]
+# #             comment_order = c["order"]
+#             comment_text = _render_tagged_tuple_to_string(_seg_and_pos([c["content"]], ckip))
+#             comments_text += f"""
+# <comment author="{comment_author}" c_type="{comment_type}">
+# <s>
+# {comment_text}
+# </s>
+# </comment>
+# """
+    
+#     return f"""<TEI.2>
+#     <teiHeader>
+#         <metadata name="author">{post_author}</metadata>
+#         <metadata name="post_id">{post_id}</metadata>
+#         <metadata name="year">{year}</metadata>
+#         <metadata name="board">{post_board}</metadata>
+#     </teiHeader>
+#     <text>
+#         <title author="{post_author}">
+#             <s>
+#                 {title_text}
+#             </s>
+#         </title>
+#         <body author="{post_author}">
+#                 {body_text}
+#         </body>
+#         {comments_text}
+#     </text>
+# </TEI.2>"""
+
+
+# In[ ]:
+
+
+# def json2tei_wrapper(json_path):
+
+#     logging.info("開始處理: %s", json_path)
+
+#     # 即將要產生的.vrt檔路徑
+#     tei_path = json_path.with_suffix(".xml")
+
+#     # 如果該資料夾已經有 .json 檔了就跳過
+#     if tei_path.is_file():
+#         logging.info("-- 已存在tei(xml)檔: %s", tei_path)
+#         return
+
+#     try:
+#         tei_result = json2tei(json_path)
+
+#     except Exception as e:
+#         print(f"出問題檔案: {json_path}")
+#         print(f"錯誤訊息: {e}")
+#         logging.error("-- 執行 json2vrt() 出問題")
+#         logging.error("-- 錯誤訊息: %s", e)
+#         error_class = e.__class__.__name__ #取得錯誤類型
+#         detail = e.args[0] #取得詳細內容
+#         cl, exc, tb = sys.exc_info() #取得Call Stack
+#         lastCallStack = traceback.extract_tb(tb)[-1] #取得Call Stack的最後一筆資料
+#         fileName = lastCallStack[0] #取得發生的檔案名稱
+#         lineNum = lastCallStack[1] #取得發生的行號
+#         funcName = lastCallStack[2] #取得發生的函數名稱
+#         errMsg = "File \"{}\", line {}, in {}: [{}] {}".format(fileName, lineNum, funcName, error_class, detail)
+#         print(errMsg)
+   
+#     else:
+# #         if json_result is None:
+# #             logging.warning("-- 空白文!")
+# #             return
+
+#         with tei_path.open("w") as f:
+#             f.write(tei_result)
+
+
+# # 斷詞
+# 
+# 舊版中研院斷詞，請直接使用 `ckipws.py`
+# 
+# ```
+# from ckipws import CKIP
+# 
+# ws = CKIP("/home/don/CKIPWS_Linux")
+# 
+# _result = ws.ApplyList(["我很好", "他很好"])
+# ```
 
 # # 存進mongo
 
@@ -747,9 +706,30 @@ def save_to_mongo(vrt_file_path, collection):
                 )
 
 
+# # 初步測試
+
+# In[3]:
+
+
+# html_path = Path("/home/don/test_gossiping_2005_html/Gossiping/2005/20050809_0220_M.1123525242.A.EE4.json")
+
+
+# In[8]:
+
+
+# print(json2tei(Path("/home/don/test_gossiping_2005_html/Gossiping/2005/20050809_0220_M.1123525242.A.EE4.json")))
+
+
+# In[10]:
+
+
+# for html_path in Path("/home/don/test_gossiping_2005_html/").rglob("*.html"):
+#     print(html_path)
+
+
 # # `dynamic_crawl`
 
-# In[1]:
+# In[ ]:
 
 
 if __name__ == '__main__':
@@ -813,9 +793,10 @@ if __name__ == '__main__':
         if args.board is not None:
             data_dir = data_dir / args.board 
         
+        print(data_dir)
         # 數總檔案數
         total_processed_files = len(list(data_dir.glob("**/*.html")))
-
+        print(total_processed_files)
         
         # 如果使用多進程
         if args.use_mp:
@@ -845,6 +826,43 @@ if __name__ == '__main__':
         logging.info(f"總處理時間: {t2 -t1} 秒")
     
     
+    elif args.cmd == "json2tei":
+        
+#         ckipws = None
+#         initial()
+        
+        # 數總檔案數
+        total_processed_files = len(list(data_dir.glob("**/*.json")))
+        
+        # 開始計時
+        t1 = timeit.default_timer()
+
+
+        # 使用多進程
+        if args.use_mp:
+            cpu_count = mp.cpu_count()
+            pool = mp.Pool(cpu_count)
+            pool.imap_unordered(json2tei_wrapper, data_dir.rglob("*.json"))
+            
+            pool.close()
+            pool.join()
+            
+        # 不使用多進程
+        else:
+            
+            for json_path in data_dir.rglob("*.json"):
+                json2tei_wrapper(json_path)
+
+        # 計時結束
+        t2 = timeit.default_timer()   
+        
+        print("=================")
+        print(f"總處理檔案數: {total_processed_files}")
+        print(f"總處理時間: {t2 - t1} 秒")
+        logging.info("=================")
+        logging.info(f"總處理檔案數: {total_processed_files}")
+        logging.info(f"總處理時間: {t2 - t1} 秒")
+
     elif args.cmd == "json2vrt":
         
         ckipws = None
@@ -881,7 +899,6 @@ if __name__ == '__main__':
         logging.info("=================")
         logging.info(f"總處理檔案數: {total_processed_files}")
         logging.info(f"總處理時間: {t2 - t1} 秒")
-
     
     elif args.cmd == "ws":
         
@@ -972,7 +989,7 @@ if __name__ == '__main__':
         print("不存在這個指令！")
 
 
-# In[94]:
+# In[ ]:
 
 
 #!jupyter nbconvert --to script ptt_helper.ipynb

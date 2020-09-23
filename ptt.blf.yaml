@@ -1,0 +1,83 @@
+# For displaying in user interface (optional)
+displayName: "TEI P4, contents in text, @type as PoS"
+
+# For describing input format in user interface (optional)
+description: A TEI P4 variant. The text element will be indexed as annotated contents. PoS tags should be in the type attribute.
+
+# (Optional, informational)
+# content, metadata or mixed?
+# (not used by BlackLab, purely informational for the frontend application)
+type: content
+
+# What element starts a new document?
+# (the only absolute XPath; the rest is relative)
+documentPath: //TEI.2
+
+# Annotated, CQL-searchable fields (also called "complex fields").
+# We usually have just one, named "contents".
+annotatedFields:
+
+  contents:
+
+    # How to display the field in the interface (optional)
+    displayName: Contents
+
+    # How to describe the field in the interface (optional)
+    description: Contents of the documents.
+
+    # What element (relative to document) contains this field's contents?
+    # (if omitted, entire document is used)
+    containerPath: .//text
+
+    # What are our word tags? (relative to container)
+    wordPath: .//w     # (body geldt niet voor OpenSonar, maar ter illustratie)
+    # Punctuation between word tags (relative to container)
+    # punctPath: .//text()[not(ancestor::w)]   # = "all text nodes (under containerPath) not inside a <w/> element"
+    
+    annotations:
+    - name: word
+      displayName: Word
+      valuePath: .
+    - name: pos
+      displayName: PoS
+      valuePath: "@type"
+
+    # XML tags within the content we'd like to index
+    # (relative to container)
+    inlineTags:
+    - path: .//s   # Sentence
+    - path: .//title  # post_type
+    - path: .//body  # post_type
+    - path: .//comment  # post_type
+
+
+
+
+metadata:
+    containerPath: teiHeader
+    fields:
+    # - name: author
+    #   uiType: text
+    #   valuePath: metadata[@name="author"]
+    # - name: post_type
+    #   uiType: select
+    #   valuePath: metadata[@name="post_type"]
+    - name: year
+      uiType: range
+      valuePath: metadata[@name="year"]
+    - name: doc_id
+      uiType: text
+      valuePath: metadata[@name="post_id"]
+    - name: board
+      uiType: text
+      valuePath: metadata[@name="board"]
+
+
+# corpusConfig:
+
+#   # Metadata fields with a special meaning
+#   specialFields:
+#     pidField: id           # unique persistent identifier, used for document lookups, etc.
+#     titleField: title      # used to display document title in interface
+#     authorField: author    # used to display author in interface
+#     dateField: date        # used to display document date in interface
