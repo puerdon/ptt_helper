@@ -56,28 +56,32 @@ annotatedFields:
 metadata:
     containerPath: teiHeader
     fields:
-    # - name: author
-    #   uiType: text
-    #   valuePath: metadata[@name="author"]
+    - name: author
+      uiType: text
+      valuePath: metadata[@name="author"]
+      type: untokenized
     # - name: post_type
     #   uiType: select
     #   valuePath: metadata[@name="post_type"]
     - name: year
       uiType: range
       valuePath: metadata[@name="year"]
+      type: numeric
     - name: doc_id
       uiType: text
       valuePath: metadata[@name="post_id"]
+      type: untokenized
     - name: board
-      uiType: text
+      uiType: select
       valuePath: metadata[@name="board"]
+      type: untokenized
 
 
-# corpusConfig:
+corpusConfig:
 
-#   # Metadata fields with a special meaning
-#   specialFields:
-#     pidField: id           # unique persistent identifier, used for document lookups, etc.
-#     titleField: title      # used to display document title in interface
-#     authorField: author    # used to display author in interface
-#     dateField: date        # used to display document date in interface
+   # Metadata fields with a special meaning
+    specialFields:
+        pidField: doc_id           # unique persistent identifier, used for document lookups, etc.
+        titleField: title      # used to display document title in interface
+        authorField: author    # used to display author in interface
+        dateField: year        # used to display document date in interface
