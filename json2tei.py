@@ -2,7 +2,7 @@ import json
 import logging
 import sys
 import traceback
-# from pathlib import Path
+from pathlib import Path
 from datetime import datetime
 from ckipws import CKIP
 
@@ -124,7 +124,19 @@ def _render_tagged_tuple_to_string(list_of_list_of_tup, post_body=False):
         # 如果是網址就不要出現
         if list_of_list_of_tup[0][0][0].startswith("http"):
             return ""
-        return '\n'.join((f'<w type="{pos}">{word}</w>' for word, pos in list_of_list_of_tup[0]))
+        
+        result = ""
+        for word, pos in list_of_list_of_tup[0]:
+            if word == "<":
+                word = "&lt;"
+            elif word == ">":
+                word = "&gt;"
+            elif word =="&":
+                word = "&amp;"
+        
+            result += f'<w type="{pos}">{word}</w>\n'
+        return result
+#         return '\n'.join((f'<w type="{pos}">{word}</w>' for word, pos in list_of_list_of_tup[0]))
     else:
         result = "\n"
         for sentence in list_of_list_of_tup:
@@ -132,8 +144,17 @@ def _render_tagged_tuple_to_string(list_of_list_of_tup, post_body=False):
             for word, pos in sentence:
                 
                 
+                
                 if word.startswith("http"):
                     continue
+                    
+                if word == "<":
+                    word = "&lt;"
+                    print(word)
+                elif word == ">":
+                    word = "&gt;"
+                elif word =="&":
+                    word = "&amp;"
                 
                 if post_body:
                     result += f'                <w type="{pos}">{word}</w>\n'
@@ -207,11 +228,11 @@ def json2tei(json_path):
 </TEI.2>"""
 
 
-def json2tei_wrapper(json_path):
+def json2tei_wrapper(output_path, json_path):
 
     logging.info("開始處理: %s", json_path)
 
-    # 即將要產生的.vrt檔路徑
+    # 即將要產生的.xml檔路徑
     tei_path = json_path.with_suffix(".xml")
 
     # 如果該資料夾已經有 .json 檔了就跳過
@@ -241,6 +262,7 @@ def json2tei_wrapper(json_path):
 #         if json_result is None:
 #             logging.warning("-- 空白文!")
 #             return
-
-        with tei_path.open("w") as f:
+        output_path = Path(output_path) / tei_path.name
+        
+        with output_path.open("w") as f:
             f.write(tei_result)
